@@ -2,7 +2,6 @@ import os
 import time
 import asyncio
 from telegram import Bot
-from PyP100 import PyP110
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = int(os.environ["CHAT_ID"])
