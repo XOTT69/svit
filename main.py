@@ -8,26 +8,24 @@ import requests
 from telegram import Bot
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-# ===== ENV =====
+# ========= ENV =========
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = int(os.environ["CHAT_ID"])
 TAPO_EMAIL = os.environ["TAPO_EMAIL"]
 TAPO_PASSWORD = os.environ["TAPO_PASSWORD"]
 
-# ===== SETTINGS =====
-CHECK_INTERVAL = 30        # сек
+# ========= SETTINGS =========
+CHECK_INTERVAL = 300        # 5 хвилин (КРИТИЧНО)
 POWER_THRESHOLD = 1.0      # Вт
 CONFIRM_COUNT = 2
-RELOGIN_INTERVAL = 60 * 60 * 6  # 6 годин
 
 last_state = None
 state_buffer = []
-last_login = 0
 token = None
 device = None
 
 
-# ===== CRYPTO =====
+# ========= CRYPTO =========
 def encrypt(data: str, key: bytes) -> str:
     iv = b"\x00" * 16
     pad = 16 - len(data) % 16
@@ -39,24 +37,27 @@ def encrypt(data: str, key: bytes) -> str:
     return base64.b64encode(encrypted).decode()
 
 
-# ===== TP-LINK CLOUD =====
-def get_token(retries=5):
+# ========= TP-LINK CLOUD =========
+def get_token(retries=3):
     payload = {
         "method": "login",
         "params": {
             "appType": "Tapo_Android",
             "cloudUserName": TAPO_EMAIL,
             "cloudPassword": hashlib.md5(TAPO_PASSWORD.encode()).hexdigest(),
-            "terminalUUID": "render-light-bot"
+            # робимо UUID "людським"
+            "terminalUUID": "android_" + hashlib.md5(BOT_TOKEN.encode()).hexdigest()[:16]
         }
     }
 
     for _ in range(retries):
         r = requests.post("https://wap.tplinkcloud.com", json=payload, timeout=10)
         data = r.json()
+
         if "result" in data and "token" in data["result"]:
             return data["result"]["token"]
-        time.sleep(2)
+
+        time.sleep(10)
 
     raise Exception(f"TP-Link login failed: {data}")
 
@@ -67,6 +68,7 @@ def get_device(token):
         json={"method": "getDeviceList"},
         timeout=10
     )
+
     devices = r.json()["result"]["deviceList"]
 
     for d in devices:
@@ -96,25 +98,19 @@ def get_power(token, device):
     return response["result"]["current_power"] / 1000  # W
 
 
-# ===== MAIN LOOP =====
+# ========= MAIN LOOP =========
 async def main():
-    global last_state, state_buffer, token, device, last_login
+    global last_state, state_buffer, token, device
 
     bot = Bot(BOT_TOKEN)
     await bot.send_message(CHAT_ID, "🤖 Світлобот запущено")
 
+    # логін ТІЛЬКИ ОДИН РАЗ
     token = get_token()
     device = get_device(token)
-    last_login = time.time()
 
     while True:
         try:
-            # перевхід у cloud раз на 6 годин
-            if time.time() - last_login > RELOGIN_INTERVAL:
-                token = get_token()
-                device = get_device(token)
-                last_login = time.time()
-
             power = get_power(token, device)
             state = "on" if power > POWER_THRESHOLD else "off"
 
@@ -131,9 +127,9 @@ async def main():
                     last_state = state
 
         except Exception as e:
-            # не падаємо, просто перечекаємо
-            print("ERROR:", e)
-            time.sleep(10)
+            # НЕ падаємо, просто чекаємо
+            print("TP-Link error:", e)
+            time.sleep(60)
 
         await asyncio.sleep(CHECK_INTERVAL)
 
